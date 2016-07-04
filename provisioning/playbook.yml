@@ -1,0 +1,138 @@
+- hosts: default
+  become: yes
+  tasks:
+    - name: Register repository
+      yum:
+        name: http://dev.mysql.com/get/mysql57-community-release-el7-8.noarch.rpm
+        state: present
+
+    - name: Install mysql
+      yum:
+        name: "{{ item }}"
+        enablerepo: mysql57-community
+        disablerepo: mysql56-community
+        state: present
+      with_items:
+        - mysql-community-server
+        - mysql-community-client
+        - mysql-community-common
+        - mysql-community-libs
+        - mysql-community-libs-compat
+
+    - name: Set start mysqld automaticaly
+      service:
+        name: mysqld
+        state: started
+        enabled: yes
+
+    - name: Install mysql module for ansible
+      yum:
+        name: MySQL-python
+        state: present
+
+    - name: Install libselinux-python
+      yum:
+        name: libselinux-python
+        state: present
+
+    - name: Confirm default setting (by mysqladmin ping)
+      shell: "mysqladmin --defaults-file={{ mysqld_5_7.defaults_file}} ping | grep alive"
+      ignore_errors: true
+      register: mysql_not_setup
+
+    - name: Create temporary .my.cnf
+      shell: sudo cat /var/log/mysqld.log | grep 'temporary password' | awk 'NR>0 {print $11}' | sudo xargs -i{} echo -e "[client]\nuser = root\npassword = \"{}\"\n\n[mysql]\nconnect-expired-password\n\n[mysqladmin]\nuser = root\npassword = \"{}\"" > /root/.my.cnf
+      when: mysql_not_setup.rc == 1
+
+    - name: Cnahge password for root user 1
+      shell: mysql --defaults-file=/root/.my.cnf -e "ALTER USER 'root'@'localhost' IDENTIFIED BY  '{{ mysqld_5_7.root_password }}' "
+      when: mysql_not_setup.rc == 1
+
+    - name: Create setting file to connect mysql for root user
+      template:
+        src: .my.cnf.j2
+        dest: "{{ mysqld_5_7.defaults_file }}"
+        owner: root
+        group: root
+        mode: 0600
+      when: mysql_not_setup.rc == 1
+
+    - name: Change password for root user 2
+      mysql_user:
+        name: "root"
+        host: "{{ item }}"
+        password: "{{ mysqld_5_7.root_password }}"
+      with_items:
+        - 127.0.0.1
+        - ::1
+        - localhost.localdomain
+        - localhost
+      when: mysql_not_setup.rc == 1
+
+    - name: Delete anonymous user
+      mysql_user:
+        name: ""
+        host: "{{ item }}"
+        state: absent
+      with_items:
+        - localhost.localdomain
+        - localhost
+      when: mysql_not_setup.rc == 1
+
+    - name: Install epel repository
+      yum:
+        name: epel-release
+
+    - name: Install git
+      yum:
+        name: git
+
+    - name: Confirm that install rbenv
+      shell: bash -lc "rbenv --version"
+      ignore_errors: true
+      register: rbenv_not_installed
+
+    - name: Install rbenv
+      shell: >-
+        git clone https://github.com/sstephenson/rbenv.git /usr/local/src/rbenv &&
+        git clone https://github.com/sstephenson/ruby-build.git /usr/local/src/rbenv/plugins/ruby-build &&
+        echo 'export RBENV_ROOT="/usr/local/src/rbenv"' >> /etc/profile.d/rbenv.sh &&
+        echo 'export PATH="${RBENV_ROOT}/bin:${PATH}"' >> /etc/profile.d/rbenv.sh &&
+        echo 'eval "$(rbenv init -)"' >> /etc/profile.d/rbenv.sh &&
+        source /etc/profile.d/rbenv.sh
+      when: rbenv_not_installed.rc == 127
+
+    - name: Install rbenv for user vagrant
+      become_user: vagrant
+      shell: source /etc/profile.d/rbenv.sh
+      when: rbenv_not_installed.rc == 127
+
+    - name: Confirm that install ruby
+      shell: bash -lc "ruby --version"
+      ignore_errors: true
+      register: ruby_not_installed
+
+    - name: Install dependency of ruby
+      yum:
+        name: "{{ item }}"
+      with_items:
+        - openssl-devel
+        - readline-devel
+        - zlib-devel
+      when: ruby_not_installed.rc == 127
+
+    - name: Install ruby
+      become_user: root
+      shell: >-
+        bash -lc "rbenv install 2.3.1" &&
+        bash -lc "rbenv global 2.3.1"
+      when: ruby_not_installed.rc == 127
+
+    - name: Install rails
+      gem:
+        name: "{{ item }}"
+        executable: /usr/local/src/rbenv/shims/gem
+        user_install: False
+      with_items:
+        - rails
+        - bundler
