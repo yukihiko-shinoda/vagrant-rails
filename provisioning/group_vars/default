@@ -1,5 +1,0 @@
-mysqld_5_7:
-  # root パスワード
-  root_password: V@grant0
-  # 接続用設定ファイルパス
-  defaults_file: /root/.my.cnf
